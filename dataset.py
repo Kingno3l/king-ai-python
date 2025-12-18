@@ -1,29 +1,36 @@
-# dataset.py
-from torch.utils.data import DataLoader, Dataset
-from torchvision import transforms
-from PIL import Image
 import os
+from torch.utils.data import Dataset, DataLoader
+from PIL import Image
+import torchvision.transforms as transforms
 
-class TestDataset(Dataset):
-    def __init__(self, folder_path, transform=None):
-        self.folder_path = folder_path
-        self.files = os.listdir(folder_path)
+# Transform for resizing & normalization
+transform = transforms.Compose([
+    transforms.Resize((224,224)),
+    transforms.ToTensor(),
+    transforms.Normalize([0.485,0.456,0.406],[0.229,0.224,0.225])
+])
+
+class XrayDataset(Dataset):
+    def __init__(self, folder, transform=None):
+        self.files = []
+        self.labels = []
         self.transform = transform
+        for label, cls in enumerate(["Normal","Pneumonia"]):
+            cls_folder = os.path.join(folder, cls)
+            for f in os.listdir(cls_folder):
+                self.files.append(os.path.join(cls_folder, f))
+                self.labels.append(label)
 
     def __len__(self):
         return len(self.files)
 
     def __getitem__(self, idx):
-        img_path = os.path.join(self.folder_path, self.files[idx])
-        img = Image.open(img_path).convert("RGB")
+        img = Image.open(self.files[idx]).convert("RGB")
         if self.transform:
             img = self.transform(img)
-        return img
+        return img, self.labels[idx]
 
-transform = transforms.Compose([
-    transforms.Resize((224,224)),
-    transforms.ToTensor()
-])
-
-test_dataset = TestDataset("path/to/test/images", transform=transform)
-test_loader = DataLoader(test_dataset, batch_size=16, shuffle=False)
+# Create DataLoaders
+train_loader = DataLoader(XrayDataset("dataset/train", transform=transform), batch_size=16, shuffle=True)
+val_loader   = DataLoader(XrayDataset("dataset/val", transform=transform), batch_size=16)
+test_loader  = DataLoader(XrayDataset("dataset/test", transform=transform), batch_size=16)

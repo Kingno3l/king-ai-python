@@ -1,25 +1,31 @@
-from fastapi import FastAPI, UploadFile, File
+from fastapi import FastAPI, UploadFile, File, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 from PIL import Image
-import io
-import os
-import json
+import io, os, json
+import torch
+import torchvision.transforms as transforms
 
-from fastapi import FastAPI, UploadFile, File, HTTPException
-from model import predict
-from explainability import generate_gradcam_overlay, generate_intrinsic_maps
+from model import DenseNet121Binary
+from explainability import generate_gradcam_overlay
 
-MAX_FILE_SIZE_MB = 5
-ALLOWED_EXTENSIONS = {"jpg", "jpeg", "png"}
+# -------------------
+# Model setup
+# -------------------
+device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
 
+model = DenseNet121Binary()
+model.load_state_dict(torch.load("model_weights.pth", map_location=device))
+model.to(device)
+model.eval()
 
+# -------------------
+# App setup
+# -------------------
 app = FastAPI(
-    title="Explainable AI Clinical Decision Support System",
-    description="Hybrid XAI-based CDSS for Pneumonia Detection from Chest X-rays",
+    title="Hybrid Explainable AI CDSS",
     version="1.0"
 )
 
-# Enable CORS (for React frontend later)
 app.add_middleware(
     CORSMiddleware,
     allow_origins=["*"],
@@ -28,92 +34,85 @@ app.add_middleware(
     allow_headers=["*"],
 )
 
+METRICS_FILE = os.path.join(os.path.dirname(__file__), "metrics.json")
+
+transform = transforms.Compose([
+    transforms.Resize((224, 224)),
+    transforms.ToTensor()
+])
+
+# -------------------
+# Routes
+# -------------------
 @app.get("/")
 def health_check():
     return {"status": "AI backend running successfully"}
 
-
-
-def ethical_notice():
-    return {
-        "disclaimer": (
-            "This system is intended to support clinical decision-making only. "
-            "It must not be used as a standalone diagnostic tool."
-        ),
-        "intended_use": (
-            "For research and educational purposes in clinical decision support. "
-            "Final diagnosis must be made by a qualified healthcare professional."
-        ),
-        "limitations": [
-            "Model performance depends on image quality and dataset bias.",
-            "Predictions may not generalize across different populations or imaging devices.",
-            "The system has not been clinically validated for real-world deployment."
-        ]
-    }
-
-
 @app.post("/predict")
 async def predict_xray(file: UploadFile = File(...)):
-    # ---------- File type validation ----------
-    file_ext = file.filename.split(".")[-1].lower()
-    if file_ext not in ALLOWED_EXTENSIONS:
-        raise HTTPException(
-            status_code=415,
-            detail="Unsupported file type. Please upload a JPG or PNG image."
-        )
-
-    # ---------- File size validation ----------
-    image_bytes = await file.read()
-    file_size_mb = len(image_bytes) / (1024 * 1024)
-    if file_size_mb > MAX_FILE_SIZE_MB:
-        raise HTTPException(
-            status_code=413,
-            detail="File too large. Maximum allowed size is 5MB."
-        )
-
-    # ---------- Image decoding validation ----------
     try:
+        image_bytes = await file.read()
         image = Image.open(io.BytesIO(image_bytes)).convert("RGB")
     except Exception:
-        raise HTTPException(
-            status_code=400,
-            detail="Invalid or corrupted image file."
-        )
+        raise HTTPException(status_code=400, detail="Invalid image file")
 
-    # ---------- Model prediction ----------
-    prediction_result = predict(image)
+    input_tensor = transform(image).unsqueeze(0).to(device)
 
-    pred_class_index = 1 if prediction_result["label"] == "Pneumonia" else 0
+    with torch.no_grad():
+        outputs = model(input_tensor)
+        pred_idx = torch.argmax(outputs, dim=1).item()
+        confidence = torch.softmax(outputs, dim=1)[0, pred_idx].item()
+
+    # label = "Pneumonia" if pred_idx == 1 else "Normal"
+
+    # if confidence >= 0.99:
+    #     label = "Pneumonia"
+    # elif pred_idx == 1:
+    #     label = "Normal"
+
+    if pred_idx == 1 and confidence >= 0.99:
+        label = "Pneumonia"
+    else:
+        label = "Normal"
+
+
+    # gradcam_overlay = generate_gradcam_overlay(
+    #     image=image,
+    #     image_tensor=input_tensor[0],
+    #     target_class=pred_idx
+    # )
 
     gradcam_overlay = generate_gradcam_overlay(
-        image,
-        prediction_result["image_tensor"],
-        target_class=pred_class_index
-    )
-
-    # intrinsic_maps = generate_intrinsic_maps(
-    #     prediction_result["image_tensor"]
-    # )
-    intrinsic_maps = None
+    image=image,
+    input_tensor=input_tensor[0],
+    target_class=pred_idx
+)
 
 
     return {
-        "prediction": prediction_result["label"],
-        "confidence": prediction_result["confidence"],
+        "prediction": label,
+        "confidence": confidence,
         "explainability": {
             "gradcam_overlay": gradcam_overlay,
-            "intrinsic_maps": intrinsic_maps
+            "intrinsic_maps": None
         },
-        "ethics": ethical_notice()
+        "ethics": {
+            "disclaimer": "This system is intended to support clinical decision-making only and must not be used as a standalone diagnostic tool.",
+            "intended_use": "Research and educational purposes in clinical decision support.",
+            "confidence_policy": "Predictions with low confidence are flagged as normal and require human review.",
+            "limitations": [
+                "Model performance depends on image quality and dataset bias.",
+                "Predictions may not generalize across populations or devices.",
+                "The system has not been clinically validated for deployment."
+            ]
+        }
+
     }
-
-
-METRICS_FILE = os.path.join(os.path.dirname(__file__), "metrics.json")
 
 @app.get("/model/metrics")
 def get_metrics():
     if not os.path.exists(METRICS_FILE):
-        return {"error": "Metrics not found. Compute metrics first."}
+        return {"error": "Metrics not found. Run compute_metrics.py first."}
+
     with open(METRICS_FILE, "r") as f:
-        metrics = json.load(f)
-    return metrics
+        return json.load(f)

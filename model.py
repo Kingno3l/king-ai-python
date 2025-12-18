@@ -1,66 +1,14 @@
 import torch
 import torch.nn as nn
-import torchvision.models as models
-import torchvision.transforms as transforms
-from PIL import Image
+from torchvision import models
 
-# -------------------------
-# Device configuration
-# -------------------------
-device = torch.device("cuda" if torch.cuda.is_available() else "cpu")
+class DenseNet121Binary(nn.Module):
+    def __init__(self):
+        super().__init__()
+        self.model = models.densenet121(weights=models.DenseNet121_Weights.IMAGENET1K_V1)
+        self.model.classifier = nn.Linear(self.model.classifier.in_features, 2)  # binary classifier
 
-# -------------------------
-# Load DenseNet121 model
-# -------------------------
-def load_model():
-    """
-    Loads a DenseNet121 model adapted for binary pneumonia classification
-    """
-    model = models.densenet121(pretrained=True)
+    def forward(self, x):
+        return self.model(x)
 
-    # Replace classifier for binary classification (Pneumonia / Normal)
-    num_features = model.classifier.in_features
-    model.classifier = nn.Linear(num_features, 2)
-
-    model.eval()
-    model.to(device)
-    return model
-
-model = load_model()
-
-# -------------------------
-# Image preprocessing
-# -------------------------
-transform = transforms.Compose([
-    transforms.Resize((224, 224)),
-    transforms.ToTensor(),
-    transforms.Normalize(
-        mean=[0.485, 0.456, 0.406],
-        std=[0.229, 0.224, 0.225]
-    )
-])
-
-# -------------------------
-# Prediction function
-# -------------------------
-def predict(image: Image.Image):
-    """
-    Runs inference on a chest X-ray image
-    """
-    image_tensor = transform(image).unsqueeze(0).to(device)
-
-    with torch.no_grad():
-        outputs = model(image_tensor)
-        probabilities = torch.softmax(outputs, dim=1)
-        confidence, predicted_class = torch.max(probabilities, 1)
-
-    label_map = {
-        0: "Normal",
-        1: "Pneumonia"
-    }
-
-    return {
-        "label": label_map[predicted_class.item()],
-        "confidence": confidence.item(),
-        "image_tensor": image_tensor
-    }
+model = DenseNet121Binary()

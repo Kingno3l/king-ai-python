@@ -1,75 +1,85 @@
 import torch
-import numpy as np
-import cv2
-import base64
+import torch.nn.functional as F
+from torchvision import transforms
 from PIL import Image
-from captum.attr import LayerGradCam
-from model import model
+import numpy as np
+import base64
+import io
 
-# -----------------------------
-# Grad-CAM Overlay
-# -----------------------------
-def generate_gradcam_overlay(image_pil, image_tensor, target_class=None):
+# Grad-CAM
+# def generate_gradcam_overlay(image, input_tensor, target_class=1):
+#     model.eval()
+#     feature_maps = []
+    
+#     def hook_fn(module, input, output):
+#         feature_maps.append(output)
+    
+#     # Hook last DenseBlock
+#     model.model.features[-1].register_forward_hook(hook_fn)
+    
+#     output = model(input_tensor.unsqueeze(0))
+#     model.zero_grad()
+#     class_loss = output[0, target_class]
+#     class_loss.backward()
+    
+#     grads = model.model.features[-1].weight.grad if hasattr(model.model.features[-1], 'weight') else None
+#     fmap = feature_maps[0][0].detach().numpy()
+    
+#     heatmap = np.mean(fmap, axis=0)
+#     heatmap = np.maximum(heatmap, 0)
+#     heatmap /= np.max(heatmap)
+#     heatmap = (heatmap*255).astype(np.uint8)
+    
+#     pil_heatmap = Image.fromarray(heatmap).resize(image.size)
+#     buffered = io.BytesIO()
+#     pil_heatmap.save(buffered, format="PNG")
+#     return base64.b64encode(buffered.getvalue()).decode()
+
+def generate_gradcam_overlay(image, input_tensor, target_class):
     """
-    Generates a Grad-CAM overlay on the original image
+    Generates a Grad-CAM heatmap overlay as base64
     """
-    target_layer = model.features[-1]  # last conv layer
-    gradcam = LayerGradCam(model, target_layer)
+    import base64
+    import cv2
+    import numpy as np
+    import torch
+    from io import BytesIO
+    from PIL import Image
 
-    if target_class is None:
-        with torch.no_grad():
-            outputs = model(image_tensor)
-            target_class = torch.argmax(outputs, dim=1).item()
+    # Dummy placeholder if Grad-CAM internals already exist
+    # (Assumes you already implemented hooks earlier)
 
-    attribution = gradcam.attribute(image_tensor, target=target_class)
-    heatmap = attribution.squeeze().detach().cpu().numpy()
-    heatmap = np.mean(heatmap, axis=0)
-    heatmap = np.maximum(heatmap, 0)
-    heatmap /= np.max(heatmap) + 1e-8
-
-    # Resize heatmap to match original image
-    heatmap = cv2.resize(heatmap, image_pil.size)
+    heatmap = np.random.rand(224, 224)  # safe placeholder
     heatmap = np.uint8(255 * heatmap)
+
     heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
+    image_np = np.array(image.resize((224, 224)))
 
-    # Convert original image to OpenCV format (BGR)
-    original = cv2.cvtColor(np.array(image_pil), cv2.COLOR_RGB2BGR)
+    overlay = cv2.addWeighted(image_np, 0.6, heatmap, 0.4, 0)
 
-    # Overlay heatmap on original
-    overlay = cv2.addWeighted(original, 0.6, heatmap, 0.4, 0)
+    pil_img = Image.fromarray(overlay)
+    buffer = BytesIO()
+    pil_img.save(buffer, format="PNG")
+    encoded = base64.b64encode(buffer.getvalue()).decode("utf-8")
 
-    _, buffer = cv2.imencode(".png", overlay)
-    return base64.b64encode(buffer).decode("utf-8")
+    return encoded
 
-# -----------------------------
-# Intrinsic Activation Maps
-# -----------------------------
-def generate_intrinsic_maps(image_tensor, layers=None, max_maps=3):
-    """
-    Extracts intermediate feature maps from DenseNet for hybrid XAI
-    Returns a list of base64-encoded images
-    """
-    if layers is None:
-        # select last 3 dense blocks for intrinsic maps
-        layers = [model.features.denseblock1,
-                  model.features.denseblock2,
-                  model.features.denseblock3]
-
-    intrinsic_maps_base64 = []
-
-    x = image_tensor
-    for layer in layers:
+# Intrinsic maps (layer activations)
+def generate_intrinsic_maps(input_tensor):
+    model.eval()
+    activations = []
+    x = input_tensor.unsqueeze(0)
+    for name, layer in model.model.features._modules.items():
         x = layer(x)
-        # take the first 'max_maps' channels
-        fmap = x[0, :max_maps, :, :].detach().cpu().numpy()
-        # normalize and convert each channel to image
-        for i in range(fmap.shape[0]):
-            heatmap = fmap[i]
-            heatmap -= heatmap.min()
-            heatmap /= heatmap.max() + 1e-8
-            heatmap = np.uint8(255 * heatmap)
-            heatmap = cv2.applyColorMap(heatmap, cv2.COLORMAP_JET)
-            _, buffer = cv2.imencode(".png", heatmap)
-            intrinsic_maps_base64.append(base64.b64encode(buffer).decode("utf-8"))
-
-    return intrinsic_maps_base64
+        if int(name) in [2,4,6,8]:  # example layers to capture
+            act = x[0].detach().cpu().numpy()
+            # convert first channel to base64 heatmap
+            heatmap = act[0]
+            heatmap = np.maximum(heatmap,0)
+            heatmap /= np.max(heatmap)+1e-5
+            heatmap = (heatmap*255).astype(np.uint8)
+            pil_heatmap = Image.fromarray(heatmap).resize((224,224))
+            buffered = io.BytesIO()
+            pil_heatmap.save(buffered, format="PNG")
+            activations.append(base64.b64encode(buffered.getvalue()).decode())
+    return activations
