@@ -1,10 +1,10 @@
-Absolutely, King Immanuel 👑. Here’s your **ready-to-copy `README.md`** file for the backend:
+Absolutely, Onyilo . Here’s your **ready-to-copy `README.md`** file for the backend:
 
 ````markdown
 # Hybrid Explainable AI Clinical Decision Support System (XAI-CDSS) - Backend
 
 **Version:** 1.0  
-**Author:** King Immanuel  
+**Author:** Onyilo  
 **Framework:** FastAPI  
 **Model Architecture:** DenseNet121 (Binary Classification: Pneumonia vs Normal)  
 **Explainability:** Grad-CAM
@@ -234,7 +234,7 @@ else:
 - Backend is API-ready for frontend integration.
 - Suitable for academic evaluation and demonstration.
 
-**Author:** King Immanuel
+**Author:** Onyilo
 **Date:** December 2025
 
 ```
